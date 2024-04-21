@@ -1,0 +1,32 @@
+# Ignore Git and version control
+.git
+.gitignore
+
+# Ignore build artifacts
+node_modules
+build
+dist
+*.log
+
+# Ignore Dockerfile and .dockerignore
+Dockerfile
+.dockerignore
+
+# Ignore temporary files
+*.tmp
+*.temp
+
+# Ignore virtual environment
+.venv
+
+# Ignore configuration files that are not needed
+*.env.local
+*.env.development.local
+*.env.test.local
+*.env.production.local
+
+# Ignore IDE and editor directories
+.idea
+.vscode
+*.swp
+*.swo
