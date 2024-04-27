@@ -1,5 +1,5 @@
 import { Observable, forkJoin, from, of } from 'rxjs';
-import { mergeMap, filter, delay } from 'rxjs/operators';
+import { mergeMap, filter, delay, concatMap } from 'rxjs/operators';
 import { getCollection } from '../infra/mongo';
 import Agenda, { type Job } from 'agenda';
 import { type UpdateResult, type BulkWriteResult, type Collection, type Document } from 'mongodb';
@@ -23,7 +23,7 @@ agenda.define('process parsed_cas_data', async (_job: Job) => {
     ));
 
     parsedCasDataCollection$.pipe(
-        mergeMap(parsedCasDataList => from(parsedCasDataList)),
+        concatMap(parsedCasDataList => from(parsedCasDataList)),
         delay(1000),
         mergeMap(file => {
             return from(getCollection('parsed_cas_data').then(collection =>
@@ -237,7 +237,7 @@ agenda.define('process parsed_cas_data', async (_job: Job) => {
     ).subscribe()
 
 });
-
+``
 (async function () {
     await agenda.start();
     await agenda.now('process parsed_cas_data', {});
