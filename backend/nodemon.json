@@ -3,6 +3,6 @@
   "ext": "ts",
   "ignore": ["src/**/*.spec.ts"],
   "execMap": {
-    "ts": "ts-node ./src/server.ts"
+    "ts": "node -r ts-node/register --experimental-require-module ./src/server.ts"
   }
 }

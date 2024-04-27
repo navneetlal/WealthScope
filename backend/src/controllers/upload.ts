@@ -2,7 +2,7 @@ import { Router } from 'express'
 import multer from 'multer'
 import { customAlphabet } from 'nanoid/non-secure'
 import mimeToExtensionMap from '../utility/mimeToExtensionMap'
-import { getCollection } from '../dao/mongo'
+import { getCollection } from '../infra/mongo'
 
 const nanoid = customAlphabet('1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTWXYZ', 21)
 

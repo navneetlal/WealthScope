@@ -3,7 +3,10 @@ import helmet from 'helmet'
 import cors from 'cors'
 import controller from './controllers'
 
-import './jobs'
+import './jobs/processParsedCasRxjs'
+import MongoClientSingleton from './infra/mongo'
+
+const DB_NAME = process.env.DB_NAME ?? 'casparser'
 
 const app = express()
 
@@ -22,4 +25,15 @@ app.get('/', (_req, res) => {
 
 app.listen(3000, async () => {
   console.log('Server is running on port 3000')
+  const client = await MongoClientSingleton.getInstance()
+  const db = client.db('DB_NAME')
+  await Promise.all([
+    db.createIndex('agenda_jobs', {
+      "name": 1,
+      "nextRunAt": 1,
+      "priority": -1,
+      "lockedAt": 1,
+      "disabled": 1
+    }, { unique: true, name: 'findAndLockNextJobIndex' })
+  ])
 })

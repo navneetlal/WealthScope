@@ -1,5 +1,5 @@
 import Agenda, { Job } from 'agenda';
-import { getCollection } from '../dao/mongo';
+import { getCollection } from '../infra/mongo';
 import axios from 'axios';
 import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat';
@@ -12,18 +12,23 @@ interface JobData {
   firstTransactionDate?: string;
 }
 
-const mongoConnectionString =
-  (process.env.MONGO_URI ?? 'mongodb://localhost:27017') +
-  '/' +
-  (process.env.DB_NAME ?? 'casparser');
+const mongoConnectionString = (process.env.MONGO_URI ?? 'mongodb://localhost:27017') + '/' + (process.env.DB_NAME ?? 'casparser');
 const agenda = new Agenda({ db: { address: mongoConnectionString, collection: 'agenda_jobs' } });
 
 (async function () {
-  agenda.define('parse amfi code', async (job: Job<JobData>) => {
+  agenda.define('monitor parsed_cas_data', async (_job: Job) => {
+    const parsedCasDataCollection = await getCollection('parsed_cas_data');
+    const parsedCasDataList = await parsedCasDataCollection.find({ locked: { $ne: true }, status: { $ne: 'completed' } }, { projection: { file_name: 1 } }).toArray();
+    if(parsedCasDataList.length === 0) return;
+    parsedCasDataList.forEach(parsedCasData => agenda.now('process parsed_cas_data', { file_name: parsedCasData.file_name }))
+  })
+
+  agenda.define('process parsed_cas_data', async (job: Job<JobData>) => {
     const { file_name } = job.attrs.data;
     const parsedCasDataCollection = await getCollection('parsed_cas_data');
-    const parsedCasData = await parsedCasDataCollection.findOne(
+    const parsedCasData = await parsedCasDataCollection.findOneAndUpdate(
       { file_name },
+      { $set: { locked: true, status: 'processing' } },
       { projection: { 'data.folios.schemes.transactions': 0 } }
     );
     const schemes = parsedCasData?.data?.folios.flatMap(({ schemes, ...rest }: any) =>
@@ -101,22 +106,21 @@ const agenda = new Agenda({ db: { address: mongoConnectionString, collection: 'a
       console.error('Error adding transactions: ', error)
     }
 
-    schemes.map((scheme: any) =>
-      agenda.now('fetch amfi navs', {
+    await Promise.all(schemes.map((scheme: any) =>
+      agenda.now('populate amfi navs', {
         ...job.attrs.data,
         amfi: scheme.amfi,
         firstTransactionDate: scheme.firstTransactionDate,
       })
-    )
+    ))
   });
 
-  agenda.define('fetch amfi navs', async (job: Job<JobData>) => {
+  agenda.define('populate amfi navs', async (job: Job<JobData>) => {
     const { amfi } = job.attrs.data;
     const data = await axios.get(`https://api.mfapi.in/mf/${amfi}`);
     const navs = data.data.data.map((nav: any) => {
       return ({ ...data.data.meta, ...nav, date: dayjs(nav.date, "DD-MM-YYYY").format('YYYY-MM-DD') })
     })
-    console.log(navs.length)
     try {
       const navCollection = await getCollection('navs')
       const result = await navCollection.bulkWrite(
@@ -142,10 +146,10 @@ const agenda = new Agenda({ db: { address: mongoConnectionString, collection: 'a
     } catch (error) {
       console.error('Error updating schemes: ', error)
     }
-    await agenda.now('create per day valuation', { amfi })
+    await agenda.now('create per day valuation for each amfi', { amfi })
   });
 
-  agenda.define('create per day valuation', async (job: Job<JobData>) => {
+  agenda.define('create per day valuation for each amfi', async (job: Job<JobData>) => {
     const { amfi } = job.attrs.data;
     const transactionCollection = await getCollection('transactions');
     const navCollection = await getCollection('navs');
@@ -197,27 +201,31 @@ const agenda = new Agenda({ db: { address: mongoConnectionString, collection: 'a
     });
 
     try {
-      const schemeCollection = await getCollection('valuations_per_amfi')
-      const result = await schemeCollection.bulkWrite(valuationArray)
+      const valuationCollection = await getCollection('valuations_per_amfi')
+      const result = await valuationCollection.bulkWrite(valuationArray)
       console.log(`Added ${result.upsertedCount} new valuations`)
     } catch (error) {
       console.error('Error adding valuations: ', error)
     }
   });
 
+  console.log('Agenda started')
+
   await agenda.start();
 
-  await agenda.now('parse amfi code', {
+  await agenda.now('process parsed_cas_data', {
     file_name: '71216576420230747V01118364674972CPIMBCP162658711.pdf',
   });
 
-  agenda.on('start', (job: Job) => {
-    console.log(`Job ${job.attrs.name} started`);
-  });
+  // await agenda.every('5 minutes','monitor parsed_cas_data');
 
-  agenda.on('complete', (job: Job) => {
-    console.log(`Job ${job.attrs.name} completed`);
-  });
+  agenda.on('start', (job) => {
+    console.log(`Job ${job.attrs.name} starting with params: ${JSON.stringify(job.attrs.data)}`)
+  })
+  
+  agenda.on('complete', (job) => {
+    console.log(`Job ${job.attrs.name} finished for params: ${JSON.stringify(job.attrs.data)}`)
+  })
 })();
 
 export default agenda;

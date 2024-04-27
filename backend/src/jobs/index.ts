@@ -1,25 +1,16 @@
 import Agenda, { Job } from 'agenda'
-import { getCollection } from '../dao/mongo'
+import { getCollection } from '../infra/mongo'
 import axios from 'axios'
 import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat'
 
 dayjs.extend(customParseFormat)
 
-const mongoConnectionString =
-  (process.env.MONGO_URI ?? 'mongodb://localhost:27017') +
-  '/' +
-  (process.env.DB_NAME ?? 'casparser')
+const mongoConnectionString = (process.env.MONGO_URI ?? 'mongodb://localhost:27017') + '/' + (process.env.DB_NAME ?? 'casparser')
 const agenda = new Agenda({ db: { address: mongoConnectionString, collection: 'agenda_jobs' } })
 
   ; (async function () {
-    agenda.define('delete old users', async (job: Job) => {
-      console.log('parse job started')
-      console.log(job.attrs.data)
-      console.log('parse job ended')
-    })
-
-    agenda.define('parse amfi code', async (job: Job) => {
+    agenda.define('process parsed_cas_data', async (job: Job) => {
       const { file_name } = job.attrs.data
       const parsedCasDataCollection = await getCollection('parsed_cas_data')
       const parsedCasData = await parsedCasDataCollection.findOne(
@@ -102,7 +93,7 @@ const agenda = new Agenda({ db: { address: mongoConnectionString, collection: 'a
       }
 
       schemes.map((scheme: any) =>
-        agenda.now('fetch amfi navs', {
+        agenda.now('populate amfi navs', {
           ...job.attrs.data,
           amfi: scheme.amfi,
           firstTransactionDate: scheme.firstTransactionDate,
@@ -110,7 +101,7 @@ const agenda = new Agenda({ db: { address: mongoConnectionString, collection: 'a
       )
     })
 
-    agenda.define('fetch amfi navs', async (job: Job) => {
+    agenda.define('populate amfi navs', async (job: Job) => {
       const { amfi } = job.attrs.data
       const data = await axios.get(`https://api.mfapi.in/mf/${amfi}`)
 
@@ -143,23 +134,18 @@ const agenda = new Agenda({ db: { address: mongoConnectionString, collection: 'a
       } catch (error) {
         console.error('Error upserting documents:', error)
       }
-      await agenda.now('create per day valuation', { amfi })
+      await agenda.now('create per day valuation per amfi', { amfi })
     })
 
-    agenda.define('create per day valuation', async (job: Job) => {
+    agenda.define('create per day valuation per amfi', async (job: Job) => {
       const transactionCollection = await getCollection('transactions')
       const navCollection = await getCollection('navs')
       const transactions = await transactionCollection.find({ amfi: job.attrs.data.amfi }).sort({ transaction_date: 1 }).toArray()
       console.log(transactions[0])
       const navs = await navCollection.find({ amfi: job.attrs.data.amfi, date: { $gte: transactions[0]?.transaction_date } }).sort({ date: 1 }).toArray()
-      console.log('First Nav: ', navs[0])
-      console.log('Last Nav: ', navs.at(-1))
-      // const x = transactions.map((transaction) => [transaction.transaction_date, transaction])
-      // console.log('Transactions: ', x)
-      // const transactionMap: any = new Map(transactions.map((transaction) => [transaction.transaction_date, [transaction, ...transactionMap.get(transaction.transaction_date)]]))
       const transactionMap = transactions.reduce((acc, transaction) => {
         const date = transaction.transaction_date;
-        if (date) { // Check if the date is not undefined
+        if (date) {
           if (!acc.has(date)) {
             acc.set(date, []);
           }
@@ -169,7 +155,6 @@ const agenda = new Agenda({ db: { address: mongoConnectionString, collection: 'a
         }
         return acc;
       }, new Map());
-      // console.log('TransactionMap: ', transactionMap.entries())
       let totalAmount = 0;
       let totalUnits = 0;
 
@@ -178,7 +163,6 @@ const agenda = new Agenda({ db: { address: mongoConnectionString, collection: 'a
         const transactionsForDate = transactionMap.get(date) || [];
 
         transactionsForDate.forEach((transaction: any) => {
-          // Convert string to number and add/subtract it to/from the total
           const amount = parseFloat(transaction.transaction_amount) || 0;
           const units = parseFloat(transaction.transaction_units) || 0;
           totalAmount += amount;
@@ -217,7 +201,7 @@ const agenda = new Agenda({ db: { address: mongoConnectionString, collection: 'a
 
     await agenda.start()
 
-    await agenda.now('parse amfi code', {
+    await agenda.now('process parsed_cas_data', {
       file_name: '71216576420230747V01118364674972CPIMBCP162658711.pdf',
     })
 
@@ -229,19 +213,11 @@ const agenda = new Agenda({ db: { address: mongoConnectionString, collection: 'a
   })()
 
 agenda.on('start', (job) => {
-  console.log('Job %s starting', job.attrs.name)
+  console.log(`Job ${job.attrs.name} starting with params: ${JSON.stringify(job.attrs.data)}`)
 })
 
 agenda.on('complete', (job) => {
-  console.log(`Job ${job.attrs.name} finished`)
+  console.log(`Job ${job.attrs.name} finished for params: ${JSON.stringify(job.attrs.data)}`)
 })
-
-// async function graceful() {
-//     await agenda.drain();
-//     process.exit(0);
-// }
-
-// process.on("SIGTERM", graceful);
-// process.on("SIGINT", graceful);
 
 export default agenda
