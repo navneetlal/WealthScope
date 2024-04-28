@@ -1,11 +1,12 @@
-import { Observable, defer, forkJoin, from, of } from 'rxjs';
-import { mergeMap, filter, delay, concatMap, tap, map, catchError, take, reduce } from 'rxjs/operators';
-import { getCollection } from '../infra/mongo';
-import Agenda, { type Job } from 'agenda';
-import { type UpdateResult, type BulkWriteResult, type Collection, type Document } from 'mongodb';
 import axios from 'axios';
+import Agenda, { type Job } from 'agenda';
 import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat';
+import { Observable, forkJoin, from, of } from 'rxjs';
+import { mergeMap, filter, concatMap, tap, map, catchError, reduce } from 'rxjs/operators';
+import { type UpdateResult, type BulkWriteResult, type Collection, type Document } from 'mongodb';
+
+import { getCollection } from '../infra/mongo';
 
 dayjs.extend(customParseFormat);
 
@@ -19,7 +20,7 @@ function isNotNull<T>(value: T | null): value is T {
 agenda.define('process parsed_cas_data', async (_job: Job) => {
 
   const parsedCasDataCollection$ = from(getCollection('parsed_cas_data').then(collection =>
-    collection.find({ locked: { $ne: true }, status: { $ne: 'processing' } }, { projection: { file_name: 1 } }).toArray()
+    collection.find({ locked: { $ne: 'true' }, status: { $ne: 'hh' } }, { projection: { file_name: 1 } }).toArray()
   ));
 
   parsedCasDataCollection$.pipe(
@@ -38,7 +39,6 @@ agenda.define('process parsed_cas_data', async (_job: Job) => {
         map((parsedCasData): any[] => parsedCasData?.data?.folios.flatMap(({ schemes, ...rest }: any) =>
           schemes.map((scheme: any) => ({ ...rest, ...scheme }))
         )),
-        
         mergeMap((schemes): Observable<{ schemes: any[], collection: Collection }> => forkJoin({
           schemes: of(schemes),
           collection: getCollection('schemes')
@@ -57,10 +57,8 @@ agenda.define('process parsed_cas_data', async (_job: Job) => {
             )
           }) as Observable<{ schemes: any[], result: BulkWriteResult }>
         }),
-        
         tap(({ result }) => console.log(`Added ${result.upsertedCount} new schemes & Updated ${result.modifiedCount} schemes.`)),
         mergeMap(({ schemes }): Observable<{ schemes: any[], collection: Collection }> => forkJoin({ schemes: of(schemes), collection: getCollection('parsed_cas_data') })),
-       
         mergeMap(({ schemes, collection }): Observable<{ schemes: any[], result: Document[] }> => forkJoin({
           schemes: of(schemes),
           result: collection.aggregate([
@@ -95,13 +93,11 @@ agenda.define('process parsed_cas_data', async (_job: Job) => {
             },
           ]).toArray()
         }) as Observable<{ schemes: any[], result: Document[] }>),
-        
         mergeMap(({ schemes, result }): Observable<{ schemes: any[], transactions: Document[], collection: Collection }> => forkJoin({
           schemes: of(schemes),
           transactions: of(result),
           collection: getCollection('transactions')
         }) as Observable<{ schemes: any[], transactions: Document[], collection: Collection }>),
-        
         mergeMap(({ schemes, transactions, collection }): Observable<{ schemes: any[], result: BulkWriteResult }> => {
           return forkJoin({
             schemes: of(schemes),
@@ -128,38 +124,34 @@ agenda.define('process parsed_cas_data', async (_job: Job) => {
           return from(schemes)
             .pipe(
               mergeMap((scheme: any) => axios.get(`https://api.mfapi.in/mf/${scheme.amfi}`)),
-              
               map(({ data }): any[] => data.data.map((nav: any) => {
                 return ({ ...data.meta, ...nav, date: dayjs(nav.date, "DD-MM-YYYY").format('YYYY-MM-DD') })
               })),
-              
               mergeMap((navs): Observable<{ navs: any[], collection: Collection }> => forkJoin({
                 navs: of(navs),
                 collection: getCollection('navs')
               })),
-              
               mergeMap(({ navs, collection }): Observable<{ navs: any[], result: BulkWriteResult }> => {
                 return forkJoin({
-                navs: of(navs),
-                result: collection.bulkWrite(
-                  navs.map((nav: any) => ({
-                    updateOne: {
-                      filter: { amfi: nav.scheme_code.toString(), date: nav.date },
-                      update: { $set: nav },
-                      upsert: true,
-                    },
-                  }))
-                )
-              }) as Observable<{ navs: any[], result: BulkWriteResult }>
-            }),
-              
+                  navs: of(navs),
+                  result: collection.bulkWrite(
+                    navs.map((nav: any) => ({
+                      updateOne: {
+                        filter: { amfi: nav.scheme_code.toString(), date: nav.date },
+                        update: { $set: nav },
+                        upsert: true,
+                      },
+                    }))
+                  )
+                }) as Observable<{ navs: any[], result: BulkWriteResult }>
+              }),
               tap(({ result }) => console.log(`Added ${result.upsertedCount} new navs & Updated ${result.modifiedCount} navs.`)),
               mergeMap(({ navs }): Observable<{ navs: any[], collection: Collection }> => forkJoin({
                 navs: of(navs),
                 collection: getCollection('schemes')
               }) as Observable<{ navs: any[], collection: Collection }>),
               mergeMap(({ navs, collection }): Observable<{ navs: any[], result: UpdateResult }> => forkJoin({
-                navs: of(navs), 
+                navs: of(navs),
                 result: collection.updateOne(
                   { amfi: navs[0].scheme_code.toString() },
                   { $set: { scheme_category: navs[0].scheme_category, scheme_type: navs[0].scheme_type } }
@@ -179,7 +171,6 @@ agenda.define('process parsed_cas_data', async (_job: Job) => {
                 transactions: of(transactions),
                 collection: getCollection('navs')
               })),
-              
               mergeMap(({ amfi, transactions, collection }: { amfi: string, transactions: Document[], collection: Collection }): Observable<{ amfi: string, transactions: Document, navs: Document }> => forkJoin({
                 amfi: of(amfi),
                 transactions: of(transactions),
@@ -202,15 +193,66 @@ agenda.define('process parsed_cas_data', async (_job: Job) => {
                 let totalAmount = 0;
                 let totalUnits = 0;
 
+                let holdings: any[] = []
+
+                transactions.filter((transaction: any) => transaction.transaction_date < navs[0].date).forEach((transaction: any) => {
+                  if (transaction.transaction_type === 'REDEMPTION') {
+                    let unitsToSell = 0 - parseFloat(transaction.transaction_unit ?? '0');
+                    while (unitsToSell > 0 && holdings.length > 0) {
+                      let holding = holdings[0];
+                      if (unitsToSell >= holding.units) {
+                        totalAmount -= holding.cost
+                        unitsToSell -= holding.units;
+                        holdings.shift();
+                      } else {
+                        totalAmount -= (holding.nav * unitsToSell);
+                        holdings[0].units -= unitsToSell;
+                        unitsToSell = 0;
+                      }
+                    }
+                    totalUnits += parseFloat((transaction.transaction_unit ?? '0'))
+                  } else {
+                    const amount = parseFloat(transaction.transaction_amount) || 0;
+                    totalAmount += amount;
+                    totalUnits += parseFloat((transaction.transaction_unit ?? '0'))
+                    holdings.push({
+                      units: parseFloat(transaction.transaction_unit ?? '0'),
+                      cost: parseFloat(transaction.transaction_amount ?? '0'),
+                      nav: parseFloat(transaction.transaction_nav ?? '0'),
+                    });
+                  }
+                });
+
                 let valuationArray = navs.map((nav: any) => {
                   const date = nav.date;
                   const transactionsForDate = transactionMap.get(date) || [];
 
                   transactionsForDate.forEach((transaction: any) => {
-                    const amount = parseFloat(transaction.transaction_amount) || 0;
-                    const units = parseFloat(transaction.transaction_units) || 0;
-                    totalAmount += amount;
-                    totalUnits += units;
+                    if (transaction.transaction_type === 'REDEMPTION') {
+                      let unitsToSell = 0 - parseFloat(transaction.transaction_unit ?? '0');
+                      while (unitsToSell > 0 && holdings.length > 0) {
+                        let holding = holdings[0];
+                        if (unitsToSell >= holding.units) {
+                          totalAmount -= holding.cost
+                          unitsToSell -= holding.units;
+                          holdings.shift();
+                        } else {
+                          totalAmount -= (holding.nav * unitsToSell);
+                          holdings[0].units -= unitsToSell;
+                          unitsToSell = 0;
+                        }
+                      }
+                      totalUnits += parseFloat((transaction.transaction_unit ?? '0'))
+                    } else {
+                      const amount = parseFloat(transaction.transaction_amount) || 0;
+                      totalAmount += amount;
+                      totalUnits += parseFloat((transaction.transaction_unit ?? '0'))
+                      holdings.push({
+                        units: parseFloat(transaction.transaction_unit ?? '0'),
+                        cost: parseFloat(transaction.transaction_amount ?? '0'),
+                        nav: parseFloat(transaction.transaction_nav ?? '0'),
+                      });
+                    }
                   });
 
                   const navValue = parseFloat(nav.nav);
@@ -252,6 +294,7 @@ agenda.define('process parsed_cas_data', async (_job: Job) => {
         mergeMap(collection => collection.updateOne({ _id: file._id }, { $set: { locked: false, status: 'completed' } })),
         tap(() => console.log(`Unlocked file ${file.file_name}`)),
         catchError(async err => {
+          console.log(err)
           const collection = await getCollection('parsed_cas_data')
           collection.updateOne({ _id: file._id }, { $set: { locked: false, status: 'failed' } })
           console.log(`Failed processing file ${file.file_name}.`)
@@ -264,17 +307,18 @@ agenda.define('process parsed_cas_data', async (_job: Job) => {
     error: err => console.error(err),
     complete: () => console.log('completed')
   })
-
 });
 
 (async function () {
   await agenda.start();
-  await agenda.every('5 minutes', 'process parsed_cas_data', {});
+  // await agenda.every('5 minutes', 'process parsed_cas_data', {});
+
+  await agenda.now('process parsed_cas_data', {});
 
   agenda.on('start', (job) => {
     console.log(`Job ${job.attrs.name} starting`)
   })
-  
+
   agenda.on('complete', (job) => {
     console.log(`Job ${job.attrs.name} finished`)
   })

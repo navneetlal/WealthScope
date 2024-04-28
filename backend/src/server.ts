@@ -26,14 +26,18 @@ app.get('/', (_req, res) => {
 app.listen(3000, async () => {
   console.log('Server is running on port 3000')
   const client = await MongoClientSingleton.getInstance()
-  const db = client.db('DB_NAME')
-  await Promise.all([
-    db.createIndex('agenda_jobs', {
-      "name": 1,
-      "nextRunAt": 1,
-      "priority": -1,
-      "lockedAt": 1,
-      "disabled": 1
-    }, { unique: true, name: 'findAndLockNextJobIndex' })
-  ])
+  const db = client.db(DB_NAME)
+  // await Promise.all([
+  //   db.createIndex('agenda_jobs', {
+  //     "name": 1,
+  //     "nextRunAt": 1,
+  //     "priority": -1,
+  //     "lockedAt": 1,
+  //     "disabled": 1
+  //   }, { unique: true }),
+  //   db.createIndex('transactions', {
+  //     "transaction_date": 1,
+  //     "transaction_type": 1
+  //   }),
+  // ])
 })

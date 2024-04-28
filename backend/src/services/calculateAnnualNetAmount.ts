@@ -4,21 +4,57 @@ const calculateAnnualNetAmounts = async () => {
     const transactionsCollection = await getCollection('transactions');
   
     const result = await transactionsCollection.aggregate([
-      {
-        $group: {
-          _id: { $year: '$transaction_date' },
-          totalInvested: {
-            $sum: {
-              $cond: [{ $eq: ['$transaction_type', 'PURCHASE_SIP'] }, '$transaction_amount', 0]
+        {
+            $addFields: {
+              transaction_date: {
+                $dateFromString: {
+                  dateString: '$transaction_date',
+                  format: '%Y-%m-%d'
+                }
+              },
+              transaction_amount: { $toDecimal: "$transaction_amount" },
             }
           },
-          totalWithdrawn: {
-            $sum: {
-              $cond: [{ $eq: ['$transaction_type', 'WITHDRAWAL'] }, '$transaction_amount', 0]
+          {
+            $project: {
+            financial_year: {
+                $cond: {
+                  if: { $gte: [{ $month: '$transaction_date' }, 4] },
+                  then: { $year: '$transaction_date' },
+                  else: { $subtract: [{ $year: '$transaction_date' }, 1] }
+                }
+              },
+              transaction_type: 1,
+              transaction_amount: 1
             }
-          }
-        }
-      },
+          },
+          {
+            $group: {
+              _id: '$financial_year',
+              totalInvested: {
+                $sum: {
+                  $cond: [
+                    {
+                      $in: ['$transaction_type', ['PURCHASE', 'PURCHASE_SIP', 'DIVIDEND_REINVESTMENT', 'SWITCH_IN']]
+                    },
+                    '$transaction_amount',
+                    0
+                  ]
+                }
+              },
+              totalWithdrawn: {
+                $sum: {
+                  $cond: [
+                    {
+                      $in: ['$transaction_type', ['REDEMPTION', 'SWITCH_OUT', 'DIVIDEND_PAYOUT', 'SEGREGATION']]
+                    },
+                    '$transaction_amount',
+                    0
+                  ]
+                }
+              }
+            }
+          },
       {
         $project: {
           _id: 0,

@@ -4,7 +4,7 @@ import { getCollection } from '../infra/mongo';
 const router = express.Router();
 
 // API to list all transactions
-router.get('/api/transactions', async (req, res) => {
+router.get('/', async (_req, res) => {
     try {
         const transactionsCollection = await getCollection('transactions');
         const transactions = await transactionsCollection.find({}).toArray();

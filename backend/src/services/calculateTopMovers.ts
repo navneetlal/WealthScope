@@ -1,7 +1,7 @@
 import { getCollection } from '../infra/mongo';
 
-const calculateTopMovers = async () => {
-    const valuationCollection = await getCollection('valuation_per_amfi');
+const calculateTopMovers = async ({ sortBy }: any) => {
+    const valuationCollection = await getCollection('valuations');
     const schemesCollection = await getCollection('schemes');
   
 
@@ -59,10 +59,12 @@ const calculateTopMovers = async () => {
         }
       }
     ]).toArray();
+
+    console.log(valuations)
   
     // Sort the results to find the top gainers and losers
-    const topGainers = [...valuations].sort((a, b) => b.percentageChange - a.percentageChange).slice(0, 5);
-    const topLosers = [...valuations].sort((a, b) => a.percentageChange - b.percentageChange).slice(0, 5);
+    const topGainers = [...valuations].sort((a, b) => sortBy === 'value' ? b.change - a.change : b.percentageChange - a.percentageChange).slice(0, 5);
+    const topLosers = [...valuations].sort((a, b) => sortBy === 'value' ? a.change - b.change : a.percentageChange - b.percentageChange).slice(0, 5);
   
     // Map the amfi codes to the scheme names
     const schemeNames = await schemesCollection.find({}).project({ amfi: 1, scheme: 1 }).toArray();
